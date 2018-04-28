@@ -3,4 +3,4 @@ all:
 clean: 
 	rm -rf ./xcheck
 test: 
-	./xcheck 20k.txt
+	./xcheck fs.img

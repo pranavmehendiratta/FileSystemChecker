@@ -1,0 +1,9 @@
+#include<stdio.h>
+#include<stdlib.h>
+
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+	printf("Usage: xcheck <file_system_image>\n");
+	exit(1);
+    }
+}
