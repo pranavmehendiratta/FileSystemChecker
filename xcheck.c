@@ -7,6 +7,8 @@
 #include <sys/stat.h> // struct stat is in this header file
 #include "fs.h" // File System structs
 
+int fsfd;
+
 #define handle_error(msg) \
     do { perror(msg); exit(EXIT_FAILURE); } while (0)
 
@@ -32,41 +34,96 @@ char* mmap_helper(int fd, off_t offset, size_t length, struct stat sb) {
     return addr;
 }
 
+int
+i2b(uint inum)
+{
+    return (inum / IPB) + 2;
+}
+
+void
+rsect(uint sec, void *buf)
+{
+    if(lseek(fsfd, sec * 512L, 0) != sec * 512L){
+	perror("lseek");
+	exit(1);
+    }
+    if(read(fsfd, buf, 512) != 512){
+	perror("read");
+	exit(1);
+    }
+}
+
+// Helper for reading the inodes
+void
+rinode(uint inum, struct dinode *ip)
+{
+    char buf[512];
+    uint bn; 
+    struct dinode *dip;
+
+    bn = i2b(inum);
+    rsect(bn, buf);
+    dip = ((struct dinode*)buf) + (inum % IPB);
+    *ip = *dip;
+}
+
+void checkInodes(struct superblock *sblk) {
+    struct dinode din;
+    for (uint inum = 1; inum <= sblk->ninodes; inum++) {
+	rinode(inum, &din);
+	
+	if (din.type < 0 || din.type > 3) {
+	    fprintf(stderr, "ERROR: bad inode.");
+	    exit(1);
+	}
+	//printf("inum: %d, type: %hu\n", inum, din.type);
+    }
+}
+
+void getSuperBlock(char* addr, struct superblock *sblk) {
+    char* spaddr = addr + BSIZE;
+    struct superblock *temp;
+    temp = ((struct superblock*)spaddr); 
+    *sblk = *temp;
+    printf("size of filesystem: %d\n", sblk->size);
+    printf("# of data blocks: %d\n", sblk->nblocks);
+    printf("# of inodes: %d\n", sblk->ninodes);
+}
+
+
 int main(int argc, char *argv[]) {
     if (argc < 2) {
 	printf("Usage: xcheck <file_system_image>\n");
 	exit(1);
     }
-    
-    ssize_t s;
-    char *addr;
-    int fd;
+
+    //ssize_t s;
+    char *start;
     struct stat sb;
-    off_t offset, pa_offset;
+    off_t offset;//, pa_offset;
     size_t length;
 
-    fd = open(argv[1], O_RDONLY);
-    if (fd == -1) {
+    fsfd = open(argv[1], O_RDONLY);
+    if (fsfd == -1) {
 	handle_error("open");
     }
+
     
-    if (fstat(fd, &sb) == -1) {      /* To obtain file size */
+    if (fstat(fsfd, &sb) == -1) {      // To obtain file size 
 	handle_error("fstat");
     }
 
     length = sb.st_size;
     offset = 0;
 
-    pa_offset = offset & ~(sysconf(_SC_PAGE_SIZE) - 1);
-    /* offset for mmap() must be page aligned */
-
-    addr = mmap_helper(fd, offset, length, sb);
+    start = mmap_helper(fsfd, offset, length, sb);
     
-    s = write(STDOUT_FILENO, addr + offset - pa_offset, length);
-    if (s != length) {
-	if (s == -1)
-	    handle_error("write");
-
-	fprintf(stderr, "partial write");
-    }
+    // Get the superblock
+    struct superblock sblk;
+    getSuperBlock(start, &sblk);
+    
+    // Check the inodes
+    checkInodes(&sblk);
+    
+    close(fsfd);
 }

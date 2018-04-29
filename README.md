@@ -7,8 +7,6 @@
 Root inode number: 1
 Block size: 512 bytes
 
-
-
 ##### Superblock
 
 ```c
