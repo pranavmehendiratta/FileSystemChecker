@@ -223,13 +223,13 @@ void checkInodes(struct superblock *sblk, char* fsstart, int* bitmapInfo,
 
 			char* msg = "ERROR: address used by inode but marked free in bitmap.";
 			checkBitmap(din.addrs[i], msg, bmstart);
+			printf("Direct Ptr: %d\n", din.addrs[i]);
 
 			// Updating the bitmap reference
 			bitmapInfo[din.addrs[i] - dbstart]--; 
 
 			// Performing all the checks for directories
 			if (din.type == T_DIR) {
-			    printf("Direct Ptr: %d\n", din.addrs[i]);
 			    uint direct_addr = din.addrs[i];
 
 			    int proc_dot_dot = i == 0 ? 1 : 0;
@@ -401,17 +401,22 @@ int main(int argc, char *argv[]) {
 
     printf("bitmapInfo: %p\n", bitmapInfo);
     printf("indirectPtrs: %p\n", indirectPtrs);
-
+    
     // Getting the bitmap info
     getBitmapInfo(bitmapInfo, &sblk);
+
+    printf("--- Checking bitmapInfo ---\n");
+    for (int i = 0; i < sblk.nblocks; i++) {
+	printf("Data Block: %d, in-use: %d\n", (i + dbstart), bitmapInfo[i]);
+    }
 
     // Getting the inodes status
     getInodesInUse(inodesInUse, &sblk); 
 
-    printf("--- Checking the inodes in use array ---\n"); 
-    for (int inum = 0; inum < sblk.ninodes; inum++) {
-	printf("inum: %d, inuse: %d\n", inum, inodesInUse[inum]);
-    }
+    //printf("--- Checking the inodes in use array ---\n"); 
+    //for (int inum = 0; inum < sblk.ninodes; inum++) {
+    //    printf("inum: %d, inuse: %d\n", inum, inodesInUse[inum]);
+    //}
 
     // Check the inodes
     checkInodes(&sblk, fsstart, bitmapInfo, indirectPtrs, inodesInUse);
@@ -428,7 +433,7 @@ int main(int argc, char *argv[]) {
 
 	    char *msg = "ERROR: bitmap marks block in use but it is not in use.";
 	    printError(msg);
-	} else if (bitmapInfo < 0) {
+	} else if (bitmapInfo[i] < 0) {
 	    // Checking if the block used twice is indirect
 	    for (int ind = 0; ind < sblk.ninodes; ind++) {
 		if ((i + dbstart) == indirectPtrs[ind]) {
@@ -468,9 +473,14 @@ int main(int argc, char *argv[]) {
 
     printf("\n\n");
 
-    printf("--- Checking the inodes in use array ---\n"); 
-    for (int inum = 0; inum < sblk.ninodes; inum++) {
-	printf("inum: %d, inuse: %d\n", inum, inodesInUse[inum]);
+    //printf("--- Checking the inodes in use array ---\n"); 
+    //for (int inum = 0; inum < sblk.ninodes; inum++) {
+    //    printf("inum: %d, inuse: %d\n", inum, inodesInUse[inum]);
+    //}
+
+    printf("--- Checking bitmapInfo ---\n");
+    for (int i = 0; i < sblk.nblocks; i++) {
+	printf("Data Block: %d, in-use: %d\n", (i + dbstart),  bitmapInfo[i]);
     }
 
     // Closing the image file and free the memory
