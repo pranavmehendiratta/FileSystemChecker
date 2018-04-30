@@ -487,7 +487,7 @@ int main(int argc, char *argv[]) {
             printError(msg);
         }
 
-	if (refCount[i] == 1) {
+	if (refCount[i] >= 1 || refCount[i] < 0) {
             printf("inum: %d\n", i);
             char *msg = "ERROR: bad reference count for file.";
             printError(msg);
