@@ -99,109 +99,6 @@ void checkBitmap(int block, char* msg, int bmstart) {
     }
 }
 
-void checkRootInode(int dbstart, int dbend, int bmstart, int bmend, int* bitmapInfo, int* indirectPtrs) {
-    uint inum = 1;
-    struct dinode din;
-    rinode(inum, &din);
-
-    // Make sure that the type is directory
-    if (din.type == T_DIR) {
-
-	// Checking the Direct pointers
-	for (int i = 0; i < NDIRECT; i++) {
-	    
-	    if (din.addrs[i] != 0) {
-	
-		printf("Direct Ptr: %d\n", din.addrs[i]);
-
-		if (din.addrs[i] >= dbstart && din.addrs[i] <= dbend) {
-		    
-		    // Test 5
-		    char* msg = "ERROR: address used by inode but marked free in bitmap.";
-		    checkBitmap(din.addrs[i], msg, bmstart);
-	
-		    // Set the data block address = (value - 1)
-		    bitmapInfo[din.addrs[i] - dbstart]--; 
-
-		    char buf[BSIZE];
-		    rsect(din.addrs[i], buf);
-
-		    struct dirent *curDir;
-		    curDir = (struct dirent*)buf;
-		    //printf("child inum: %d, child name: %s\n", curDir->inum, curDir->name);
-
-		    struct dirent *parentDir;
-		    parentDir = (struct dirent*)(buf + 16);
-		    
-		    if (inum != curDir->inum && strcmp(curDir->name, ".") == 0) {
-			char *msg = "ERROR: directory not properly formatted";
-			printError(msg);
-		    }
-		    
-		    //printf("parent inum: %d, parent name: %s\n", parentDir->inum, parentDir->name);
-		    if (curDir->inum != parentDir->inum || curDir->inum != 1 || parentDir->inum != 1) {
-			char* msg = "ERROR: root directory does not exist.";
-			printError(msg);
-		    }
-		} else {
-		    char* msg = "ERROR: bad direct address in inode.";
-		    printError(msg);
-		}
-	    }
-	}
-
-	// Checking the indirect pointers
-	uint indirect = din.addrs[NDIRECT];
-	if (indirect != 0) { 
-
-	    if (indirect >= dbstart && indirect <= dbend) {
-		// Test 5
-		char* msg = "ERROR: address used by inode but marked free in bitmap.";
-		checkBitmap(indirect, msg, bmstart);
-		
-		printf("Indirect Ptr: %d\n", indirect);
-		   
-		// Saving the indirect pointer
-		indirectPtrs[inum] = indirect;
-
-		// Set the data block address = (value - 1)
-		bitmapInfo[indirect - dbstart]--; 
-		
-		// Get the address to data block inside indirect pointer block
-		char buf[512];
-		rsect(indirect, &buf);
-
-		for (int i = 0; i < 128; i++) {
-		    uint datablk = (uint)(*((int*)(buf + (i * 4))));
-		    if (datablk != 0) {
-			if (datablk >= dbstart && datablk <= dbend) {
-
-			    char* msg = "ERROR: address used by inode but marked free in bitmap.";
-			    checkBitmap(datablk, msg, bmstart);
-		
-			    printf("Indirect -> Direct Ptr: %d\n", datablk);
-
-			    bitmapInfo[datablk - dbstart]--; 
-			    
-			    //printf("Block #: %d\n", datablk);
-			    // TODO: Should this error be 'indirect' instead of 'direct'?
-			} else {
-			    char *msg = "ERROR: bad direct address in inode.";
-			    printError(msg);
-			}
-		    }
-		}
-	    } else {
-		char* msg = "ERROR: bad indirect address in inode.";
-		printError(msg);
-	    }
-	}
-    } else { 
-	char* msg = "ERROR: root directory does not exist.";
-	printError(msg);
-    }
-}
-
 void checkInodes(struct superblock *sblk, char* fsstart, int* bitmapInfo, int* indirectPtrs) {
 
     printf("\n\n");
@@ -209,10 +106,7 @@ void checkInodes(struct superblock *sblk, char* fsstart, int* bitmapInfo, int* i
     printf("File system start: %p\n", fsstart);
     printf("Dinode size: %zu\n", sizeof(struct dinode));
 
-
-    checkRootInode(dbstart, dbend, bmstart, bmend, bitmapInfo, indirectPtrs);
-
-    for (uint inum = 2; inum < sblk->ninodes; inum++) {
+    for (uint inum = 1; inum < sblk->ninodes; inum++) {
 	struct dinode din;
 	rinode(inum, &din);
 
@@ -225,22 +119,33 @@ void checkInodes(struct superblock *sblk, char* fsstart, int* bitmapInfo, int* i
 	if (din.type != T_UNALLOC) {
 	    printf("---- inum: %d, type: %hu ----\n", inum, din.type);
 
+	    // Checking root inode
+	    if (inum == 1) {
+		if (din.type != T_DIR) {
+		    char* msg = "ERROR: root directory does not exist.";
+		    printError(msg);
+		} 
+	    }
+
 	    // Checking the Direct pointers
 	    for (int i = 0; i < NDIRECT; i++) {
 		if (din.addrs[i] != 0) {
 		    if (din.addrs[i] >= dbstart && din.addrs[i] <= dbend) {
-			
+
 			printf("Direct Ptr: %d\n", din.addrs[i]);
 
 			char* msg = "ERROR: address used by inode but marked free in bitmap.";
 			checkBitmap(din.addrs[i], msg, bmstart);
 
 			bitmapInfo[din.addrs[i] - dbstart]--; 
-			
+
 			// Getting the . directory
 			if (din.type == T_DIR) {
+			    
+			    // Getting the data block for the directory
 			    char buf[BSIZE];
 			    rsect(din.addrs[i], buf);
+			    
 			    struct dirent *curDir;
 			    curDir = (struct dirent*)buf;
 
@@ -249,6 +154,18 @@ void checkInodes(struct superblock *sblk, char* fsstart, int* bitmapInfo, int* i
 			    if (inum != curDir->inum && strcmp(curDir->name, ".") == 0) {
 				char* msg = "ERROR: directory not properly formatted.";
 				printError(msg);
+			    }
+
+
+			    // Checking . and .. for root directory
+			    if (inum == 1) {
+				struct dirent *parentDir;
+				parentDir = (struct dirent*)(buf + 16);
+
+				if (curDir->inum != parentDir->inum || curDir->inum != 1 || parentDir->inum != 1) {
+				    char* msg = "ERROR: root directory does not exist.";
+				    printError(msg);
+				}
 			    }
 			}
 		    } else {
@@ -264,12 +181,12 @@ void checkInodes(struct superblock *sblk, char* fsstart, int* bitmapInfo, int* i
 
 		if (indirect >= dbstart && indirect <= dbend) {
 		    printf("-- Starting indirect pointers --\n");
-	
+
 		    printf("Indirect Ptr: %d\n", indirect);
 
 		    char* msg = "ERROR: address used by inode but marked free in bitmap.";
 		    checkBitmap(indirect, msg, bmstart);
-				
+
 		    // Saving the indirect pointer
 		    indirectPtrs[inum] = indirect;
 
@@ -289,7 +206,7 @@ void checkInodes(struct superblock *sblk, char* fsstart, int* bitmapInfo, int* i
 				checkBitmap(datablk, msg, bmstart);
 
 				printf("Indirect -> direct Ptr: %d\n", datablk);
-				
+
 				bitmapInfo[datablk - dbstart]--; 
 
 				//printf("Block #: %d\n", datablk);
@@ -323,7 +240,7 @@ void getSuperBlock(char* addr, struct superblock *sblk) {
 void updateBitmapInfo(int* bitmapInfo, struct superblock *sblk) {
     char buf[BSIZE];
     rsect(bmstart, buf);	
-    
+
     printf("Bitmap start: %d\n", bmstart);
 
     for (int j = 0, i = dbstart; i < dbend; i++, j++) {
@@ -344,7 +261,7 @@ int main(int argc, char *argv[]) {
     struct stat sb;
     off_t offset;//, pa_offset;
     size_t length;
-    
+
     fsfd = open(argv[1], O_RDONLY);
     if (fsfd == -1) {
 	char *msg = "image not found.";
@@ -360,7 +277,7 @@ int main(int argc, char *argv[]) {
     offset = 0;
 
     fsstart = mmap_helper(fsfd, offset, length, sb);
-    
+
     // Get the superblock
     struct superblock sblk;
     getSuperBlock(fsstart, &sblk);
@@ -379,30 +296,30 @@ int main(int argc, char *argv[]) {
 
     printf("Data Block start #: %d\n", dbstart); 
     printf("Data Block end #: %d\n", dbend); 
-    
+
     int *bitmapInfo;
     bitmapInfo = malloc(sizeof(int) * sblk.nblocks);
-    
+
     if (bitmapInfo == 0) {
 	fprintf(stderr, "Unable to allocate memory");
     }
-    
+
     int *indirectPtrs;
     indirectPtrs = malloc(sizeof(int) * sblk.ninodes);
 
     if (indirectPtrs == 0) {
 	fprintf(stderr, "Unable to allocate memory");
     }
-    
+
     printf("bitmapInfo: %p\n", bitmapInfo);
     printf("indirectPtrs: %p\n", indirectPtrs);
-    
+
     updateBitmapInfo(bitmapInfo, &sblk);
     //free(bitmapInfo);
     //free(indirectPtrs);
 
     //exit(0);
-    
+
 
     //printf("--- Bitmap Info ----\n");
     //for (int i = 0; i < sblk.nblocks; i++) {
@@ -415,13 +332,13 @@ int main(int argc, char *argv[]) {
     printf("\n\n");
 
     printf("--- Bitmap Info ----\n");
-    
-    
+
+
     for (int i = 0; i < sblk.nblocks; i++) {
 	//printf("Bit: %d, value: %d\n", i, bitmapInfo[i]);
 	if (bitmapInfo[i] == 1) {
 	    //printf("Block: %d not used\n", i);
-	    
+
 	    char *msg = "ERROR: bitmap marks block in use but it is not in use.";
 	    printError(msg);
 	} else if (bitmapInfo < 0) {
@@ -443,7 +360,7 @@ int main(int argc, char *argv[]) {
     }
 
     printf("Done with everything\n");
-    
+
     close(fsfd);
 
     printf("bitmapInfo: %p\n", bitmapInfo);
@@ -452,9 +369,9 @@ int main(int argc, char *argv[]) {
     // Freeing all the memory
     int ret = munmap(fsstart, length);
     if (ret != 0) {
-        fprintf(stderr, "Unable to munmap. Return value: %d\n", ret);
+	fprintf(stderr, "Unable to munmap. Return value: %d\n", ret);
     }
-    
+
     free(bitmapInfo);
     free(indirectPtrs);
 
