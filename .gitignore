@@ -1,3 +1,5 @@
 xv6/
 xcheck
 mmap*
+runtests.log
+vg_summary.xml
