@@ -14,8 +14,15 @@ int fsfd;
 #define T_FILE 2
 #define T_DEV 3
 
+
 #define handle_error(msg) \
     do { perror(msg); exit(EXIT_FAILURE); } while (0)
+
+
+void printError(char* msg) {
+    fprintf(stderr, "%s\n", msg);
+    exit(1);
+}
 
 char* mmap_helper(int fd, off_t offset, size_t length, struct stat sb) {
     char *addr;
@@ -78,7 +85,7 @@ int isNthBitTrue(unsigned char c, int n) {
 }
 
 void checkBitmap(int block, char* msg, int bmstart) {
-    printf("valid addr found: %d\n", block);
+    //printf("valid addr found: %d\n", block);
 
     char buf[BSIZE];
     rsect(bmstart + (block / (BSIZE * 8)), buf);	
@@ -87,8 +94,7 @@ void checkBitmap(int block, char* msg, int bmstart) {
     int bit = block % 8;
 
     if (isNthBitTrue(buf[byte], bit) == 0) {
-	fprintf(stderr, "%s\n", msg);
-	exit(1);
+	printError(msg);
     }
 }
 
@@ -104,7 +110,6 @@ void checkRootInode(int dbstart, int dbend) {
 	for (int i = 0; i < NDIRECT; i++) {
 	    if (din.addrs[i] != 0) {
 		if (din.addrs[i] >= dbstart && din.addrs[i] <= dbend) {
-		    // Nothing to do here
 		    char buf[BSIZE];
 		    rsect(din.addrs[i], buf);
 
@@ -114,12 +119,20 @@ void checkRootInode(int dbstart, int dbend) {
 
 		    struct dirent *parentDir;
 		    parentDir = (struct dirent*)(buf + 16);
+		    
+		    if (inum != curDir->inum) {
+			char *msg = "ERROR: directory not properly formatted";
+			printError(msg);
+		    }
+		    
 		    //printf("parent inum: %d, parent name: %s\n", parentDir->inum, parentDir->name);
 		    if (curDir->inum != parentDir->inum || curDir->inum != 1 || parentDir->inum != 1) {
-			fprintf(stderr, "ERROR: root directory does not exist.\n");
+			char* msg = "ERROR: root directory does not exist.";
+			printError(msg);
 		    }
 		} else {
-		    fprintf(stderr, "ERROR: bad direct address in inode.\n");
+		    char* msg = "ERROR: bad direct address in inode.";
+		    printError(msg);
 		}
 	    }
 	}
@@ -130,7 +143,8 @@ void checkRootInode(int dbstart, int dbend) {
 	    if (indirect >= dbstart && indirect <= dbend) {
 		// Nothing to do here
 	    } else {
-		fprintf(stderr, "ERROR: bad indirect address in inode.\n");
+		char* msg = "ERROR: bad indirect address in inode.";
+		printError(msg);
 	    }
 	}
     }
@@ -165,12 +179,12 @@ void checkInodes(struct superblock *sblk, char* fsstart) {
 	rinode(inum, &din);
 
 	if (din.type < 0 || din.type > 3) {
-	    fprintf(stderr, "ERROR: bad inode.");
-	    exit(1);
+	    char* msg = "ERROR: bad inode.";
+	    printError(msg);
 	}
 
 	// Checking the inuse inodes
-	if (din.type != 0) {
+	if (din.type != T_UNALLOC) {
 	    printf("---- inum: %d, type: %hu ----\n", inum, din.type);
 
 	    // Checking the Direct pointers
@@ -178,6 +192,19 @@ void checkInodes(struct superblock *sblk, char* fsstart) {
 		if (din.addrs[i] != 0 && din.addrs[i] >= dbstart && din.addrs[i] <= dbend) {
 		    char *msg = "ERROR: bad direct address in inode.";
 		    checkBitmap(din.addrs[i], msg, bmstart);
+
+		    // Getting the . directory
+		    if (din.type == T_DIR) {
+			char buf[BSIZE];
+			rsect(din.addrs[i], buf);
+			struct dirent *curDir;
+			curDir = (struct dirent*)buf;
+
+			if (inum != curDir->inum) {
+			    char* msg = "ERROR: directory not properly formatted.";
+			    printError(msg);
+			}
+		    }
 		} 
 	    }
 
