@@ -196,6 +196,9 @@ void checkRootInode(int dbstart, int dbend, int bmstart, int bmend, int* bitmapI
 		printError(msg);
 	    }
 	}
+    } else { 
+	char* msg = "ERROR: root directory does not exist.";
+	printError(msg);
     }
 }
 
