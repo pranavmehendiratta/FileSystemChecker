@@ -99,6 +99,19 @@ void checkBitmap(int block, char* msg, int bmstart) {
     }
 }
 
+void checkInodeBlock(uint inum) {
+    struct dinode din;
+    rinode(inum, &din);
+   
+    printf("Inside checkInodeBlock -> inum: %d, type: %d\n", inum, din.type);
+
+    //if (din.type != T_DIR && din.type != T_FILE && din.type != T_DEV) {
+    if (din.type <= 0) {
+	char* msg = "ERROR: inode referred to in directory but marked free.";
+	printError(msg);
+    }
+}
+
 void updateInodesInUse(struct superblock *sblk, char *buf, int *inodesInUse, int startIndex) {
     printf("Inside UpdateInodesInUse startIndex: %d\n", startIndex);
     int max_dirent = BSIZE / sizeof(struct dirent);
@@ -110,15 +123,15 @@ void updateInodesInUse(struct superblock *sblk, char *buf, int *inodesInUse, int
 	if (entry->inum != 0) {
 	    printf("inum: %d, name: %s\n", entry->inum, entry->name);
 	    inodesInUse[entry->inum]--;
+	    checkInodeBlock(entry->inum);
 	}
     }
-
 }
 
 void processDirectory (int inum, int* inodesInUse, struct superblock *sblk, uint addr, int proc_dot_dot) {
-    
+
     printf("Inside process directory inum: %d, proc_dot_dot: %d\n", inum, proc_dot_dot);
-    
+
     // Getting the data block for the directory
     char buf[BSIZE];
     rsect(addr, buf);
@@ -127,11 +140,11 @@ void processDirectory (int inum, int* inodesInUse, struct superblock *sblk, uint
 	// Getting the . directory
 	struct dirent *curDir;
 	curDir = (struct dirent*)buf;
-	
+
 	// Checking the parent directory
 	struct dirent *parentDir;
 	parentDir = (struct dirent*)(buf + sizeof(struct dirent));
-	
+
 	printf("curDir->name: %s, curDir->inum: %d\n", curDir->name, curDir->inum);
 	printf("parentDir->name: %s, parentDir->inum: %d\n", parentDir->name, parentDir->inum);
 
@@ -142,7 +155,7 @@ void processDirectory (int inum, int* inodesInUse, struct superblock *sblk, uint
 		printError(msg);
 	    }
 	}
-	
+
 	// Checking that . directory refers to inode itself and its name is correct
 	if (inum != curDir->inum || strcmp(curDir->name, ".") != 0) {
 	    char* msg = "ERROR: directory not properly formatted.";
@@ -162,6 +175,11 @@ void processDirectory (int inum, int* inodesInUse, struct superblock *sblk, uint
 	if (parentDir->inum != 0) {
 	    inodesInUse[parentDir->inum]--;
 	}	
+
+	// Checking that the inodes . and .. refers to are marked valid in the inode block
+	checkInodeBlock(curDir->inum);
+	checkInodeBlock(parentDir->inum);
+
     }
     // Updating the inodes used
     int startIndex = proc_dot_dot == 1 ? 2 : 0;
@@ -213,7 +231,7 @@ void checkInodes(struct superblock *sblk, char* fsstart, int* bitmapInfo,
 			if (din.type == T_DIR) {
 			    printf("Direct Ptr: %d\n", din.addrs[i]);
 			    uint direct_addr = din.addrs[i];
-			    
+
 			    int proc_dot_dot = i == 0 ? 1 : 0;
 			    processDirectory(inum, inodesInUse, sblk, direct_addr, proc_dot_dot); 
 			}
