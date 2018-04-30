@@ -247,15 +247,15 @@ void checkInodes(struct superblock *sblk, char* fsstart, int* bitmapInfo,
 	    if (indirect != 0) {
 
 		if (indirect >= dbstart && indirect <= dbend) {
-		    //printf("Indirect Ptr: %d\n", indirect);
-
 		    printf("-- Starting indirect pointers --\n");
+		    printf("Indirect Ptr: %d\n", indirect);
+
 
 		    char* msg = "ERROR: address used by inode but marked free in bitmap.";
 		    checkBitmap(indirect, msg, bmstart);
 
 		    // Saving the indirect pointer
-		    indirectPtrs[inum] = indirect;
+		    indirectPtrs[indirect - dbstart]++;
 
 		    // Updating the bitmap reference
 		    bitmapInfo[indirect - dbstart]--; 
@@ -272,8 +272,11 @@ void checkInodes(struct superblock *sblk, char* fsstart, int* bitmapInfo,
 				char* msg = "ERROR: address used by inode but marked free in bitmap.";
 				checkBitmap(datablk, msg, bmstart);
 
-				//printf("Indirect -> direct Ptr: %d\n", datablk);
+				printf("Indirect -> direct Ptr: %d\n", datablk);
 
+				// Updating indirect pointers
+				indirectPtrs[datablk - dbstart]++;
+				
 				// Updating the bitmap reference
 				bitmapInfo[datablk - dbstart]--; 
 
@@ -387,7 +390,7 @@ int main(int argc, char *argv[]) {
 	fprintf(stderr, "Unable to allocate memory");
     }
 
-    int *indirectPtrs = (int*)malloc(sizeof(int) * sblk.ninodes);
+    int *indirectPtrs = (int*)malloc(sizeof(int) * sblk.nblocks);
 
     if (indirectPtrs == 0) {
 	fprintf(stderr, "Unable to allocate memory");
@@ -435,14 +438,14 @@ int main(int argc, char *argv[]) {
 	    printError(msg);
 	} else if (bitmapInfo[i] < 0) {
 	    // Checking if the block used twice is indirect
-	    for (int ind = 0; ind < sblk.ninodes; ind++) {
-		if ((i + dbstart) == indirectPtrs[ind]) {
-		    //printf("Indirect ptr used more than once: %d \n", i);
-		    char* msg = "ERROR: indirect address used more than once.";
-		    printError(msg);
-		}
-		//printf("inum: %d, indirectPtr: %d\n", i, indirectPtrs[i]);
+	    if (indirectPtrs[i] > 0) {
+		//printf("Indirect ptr used more than once: %d \n", i);
+		char* msg = "ERROR: indirect address used more than once.";
+		printError(msg);
 	    }
+	    //printf("inum: %d, indirectPtr: %d\n", i, indirectPtrs[i]);
+
+	    printf("ptr: %d\n", (i + dbstart));
 
 	    // Checking if the block used twice is indirect
 	    //printf("Direct ptr used more than once: %d \n", i);
