@@ -8,12 +8,16 @@
 #include "fs.h" // File System structs
 
 int fsfd;
+int inodeBlks;
+int bmstart;
+int bmend;
+int dbstart;
+int dbend;
 
 #define T_UNALLOC 0
 #define T_DIR 1
 #define T_FILE 2
 #define T_DEV 3
-
 
 #define handle_error(msg) \
     do { perror(msg); exit(EXIT_FAILURE); } while (0)
@@ -98,7 +102,7 @@ void checkBitmap(int block, char* msg, int bmstart) {
     }
 }
 
-void checkRootInode(int dbstart, int dbend, int bmstart, int bmend) {
+void checkRootInode(int dbstart, int dbend, int bmstart, int bmend, int* bitmapInfo, int* indirectPtrs) {
     uint inum = 1;
     struct dinode din;
     rinode(inum, &din);
@@ -110,13 +114,18 @@ void checkRootInode(int dbstart, int dbend, int bmstart, int bmend) {
 	for (int i = 0; i < NDIRECT; i++) {
 	    
 	    if (din.addrs[i] != 0) {
-		
+	
+		printf("Direct Ptr: %d\n", din.addrs[i]);
+
 		if (din.addrs[i] >= dbstart && din.addrs[i] <= dbend) {
 		    
 		    // Test 5
 		    char* msg = "ERROR: address used by inode but marked free in bitmap.";
 		    checkBitmap(din.addrs[i], msg, bmstart);
-		
+	
+		    // Set the data block address = (value - 1)
+		    bitmapInfo[din.addrs[i]]--; 
+
 		    char buf[BSIZE];
 		    rsect(din.addrs[i], buf);
 
@@ -152,7 +161,15 @@ void checkRootInode(int dbstart, int dbend, int bmstart, int bmend) {
 		// Test 5
 		char* msg = "ERROR: address used by inode but marked free in bitmap.";
 		checkBitmap(indirect, msg, bmstart);
-		    
+		
+		printf("Indirect Ptr: %d\n", indirect);
+		   
+		// Saving the indirect pointer
+		indirectPtrs[inum] = indirect;
+
+		// Set the data block address = (value - 1)
+		bitmapInfo[indirect]--; 
+		
 		// Get the address to data block inside indirect pointer block
 		char buf[512];
 		rsect(indirect, &buf);
@@ -163,8 +180,12 @@ void checkRootInode(int dbstart, int dbend, int bmstart, int bmend) {
 			if (datablk >= dbstart && datablk <= dbend) {
 
 			    char* msg = "ERROR: address used by inode but marked free in bitmap.";
-			    checkBitmap(din.addrs[i], msg, bmstart);
+			    checkBitmap(datablk, msg, bmstart);
+		
+			    printf("Indirect -> Direct Ptr: %d\n", datablk);
 
+			    bitmapInfo[datablk]--; 
+			    
 			    //printf("Block #: %d\n", datablk);
 			    // TODO: Should this error be 'indirect' instead of 'direct'?
 			} else {
@@ -181,34 +202,15 @@ void checkRootInode(int dbstart, int dbend, int bmstart, int bmend) {
     }
 }
 
-
-
-
-
-
-void checkInodes(struct superblock *sblk, char* fsstart) {
+void checkInodes(struct superblock *sblk, char* fsstart, int* bitmapInfo, int* indirectPtrs) {
 
     printf("\n\n");
 
     printf("File system start: %p\n", fsstart);
     printf("Dinode size: %zu\n", sizeof(struct dinode));
 
-    int inodeBlks = (sblk->ninodes / (BSIZE / sizeof(struct dinode)));
-    printf("# of inode blocks:  %d\n", inodeBlks);
 
-    int bmstart = 3 + inodeBlks; // 1st bitmap block
-    int bmend = bmstart + (sblk->nblocks / (BSIZE * 8));
-
-    printf("Bitmap start #: %d\n", bmstart); 
-    printf("Bitmap end #: %d\n", bmend); 
-
-    int dbstart = bmend + 1; // 1st data block number
-    int dbend = dbstart + sblk->nblocks;
-
-    printf("Data Block start #: %d\n", dbstart); 
-    printf("Data Block end #: %d\n", dbend); 
-
-    checkRootInode(dbstart, dbend, bmstart, bmend);
+    checkRootInode(dbstart, dbend, bmstart, bmend, bitmapInfo, indirectPtrs);
 
     for (uint inum = 2; inum < sblk->ninodes; inum++) {
 	struct dinode din;
@@ -227,10 +229,14 @@ void checkInodes(struct superblock *sblk, char* fsstart) {
 	    for (int i = 0; i < NDIRECT; i++) {
 		if (din.addrs[i] != 0) {
 		    if (din.addrs[i] >= dbstart && din.addrs[i] <= dbend) {
+			
+			printf("Direct Ptr: %d\n", din.addrs[i]);
 
 			char* msg = "ERROR: address used by inode but marked free in bitmap.";
 			checkBitmap(din.addrs[i], msg, bmstart);
 
+			bitmapInfo[din.addrs[i]]--; 
+			
 			// Getting the . directory
 			if (din.type == T_DIR) {
 			    char buf[BSIZE];
@@ -258,9 +264,17 @@ void checkInodes(struct superblock *sblk, char* fsstart) {
 
 		if (indirect >= dbstart && indirect <= dbend) {
 		    printf("-- Starting indirect pointers --\n");
+	
+		    printf("Indirect Ptr: %d\n", indirect);
 
 		    char* msg = "ERROR: address used by inode but marked free in bitmap.";
 		    checkBitmap(indirect, msg, bmstart);
+				
+		    // Saving the indirect pointer
+		    indirectPtrs[inum] = indirect;
+
+		    // Set the data block address = (value - 1)
+		    bitmapInfo[indirect]--; 
 
 		    // Get the address to data block inside indirect pointer block
 		    char buf[512];
@@ -272,7 +286,11 @@ void checkInodes(struct superblock *sblk, char* fsstart) {
 			    if (datablk >= dbstart && datablk <= dbend) {
 
 				char* msg = "ERROR: address used by inode but marked free in bitmap.";
-				checkBitmap(din.addrs[i], msg, bmstart);
+				checkBitmap(datablk, msg, bmstart);
+
+				printf("Indirect -> direct Ptr: %d\n", datablk);
+				
+				bitmapInfo[datablk]--; 
 
 				//printf("Block #: %d\n", datablk);
 				// TODO: Should this error be 'indirect' instead of 'direct'?
@@ -301,6 +319,19 @@ void getSuperBlock(char* addr, struct superblock *sblk) {
     printf("# of inodes: %d\n", sblk->ninodes);
 }
 
+// Test 6
+void updateBitmapInfo(int* bitmapInfo, struct superblock *sblk) {
+    char buf[BSIZE];
+    rsect(bmstart, buf);	
+    
+    printf("Bitmap start: %d\n", bmstart);
+
+    for (int i = dbstart; i < dbend; i++) {
+	int byte = i / 8;
+	int bit = i % 8;
+	bitmapInfo[i] = isNthBitTrue(buf[byte], bit);
+    }
+} 
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
@@ -313,7 +344,7 @@ int main(int argc, char *argv[]) {
     struct stat sb;
     off_t offset;//, pa_offset;
     size_t length;
-
+    
     fsfd = open(argv[1], O_RDONLY);
     if (fsfd == -1) {
 	handle_error("open");
@@ -328,13 +359,62 @@ int main(int argc, char *argv[]) {
     offset = 0;
 
     fsstart = mmap_helper(fsfd, offset, length, sb);
-
+    
     // Get the superblock
     struct superblock sblk;
     getSuperBlock(fsstart, &sblk);
 
-    // Check the inodes
-    checkInodes(&sblk, fsstart);
+    inodeBlks = (sblk.ninodes / (BSIZE / sizeof(struct dinode)));
+    printf("# of inode blocks:  %d\n", inodeBlks);
 
+    bmstart = 3 + inodeBlks; // 1st bitmap block
+    bmend = bmstart + (sblk.nblocks / (BSIZE * 8));
+
+    printf("Bitmap start #: %d\n", bmstart); 
+    printf("Bitmap end #: %d\n", bmend); 
+
+    dbstart = bmend + 1; // 1st data block number
+    dbend = dbstart + sblk.nblocks;
+
+    printf("Data Block start #: %d\n", dbstart); 
+    printf("Data Block end #: %d\n", dbend); 
+    
+    int *bitmapInfo = (int*)malloc(sizeof(int) * sblk.nblocks);
+    int *indirectPtrs = (int*)malloc(sizeof(int) * sblk.ninodes);
+
+    updateBitmapInfo(bitmapInfo, &sblk);
+
+    printf("--- Bitmap Info ----\n");
+    for (int i = 0; i < sblk.nblocks; i++) {
+	printf("Bit: %d, value: %d\n", i, bitmapInfo[i]);
+    }
+
+    // Check the inodes
+    checkInodes(&sblk, fsstart, bitmapInfo, indirectPtrs);
+
+    printf("\n\n");
+
+    printf("--- Bitmap Info ----\n");
+    for (int i = 0; i < sblk.nblocks; i++) {
+	//printf("Bit: %d, value: %d\n", i, bitmapInfo[i]);
+	if (bitmapInfo[i] == 1) {
+	    char *msg = "ERROR: bitmap marks block in use but it is not in use.";
+	    printError(msg);
+	} else if (bitmapInfo < 0) {
+	    // Checking if the block used twice is indirect
+	    for (int ind = 0; ind < sblk.ninodes; ind++) {
+		if (i == indirectPtrs[ind]) {
+		    char* msg = "ERROR: indirect address used more than once.";
+		    printError(msg);
+		}
+		//printf("inum: %d, indirectPtr: %d\n", i, indirectPtrs[i]);
+	    }
+
+	    // Checking if the block used twice is indirect
+	    char* msg = "ERROR: direct address used more than once.";
+	    printError(msg);
+	}
+    }
+    
     close(fsfd);
 }
