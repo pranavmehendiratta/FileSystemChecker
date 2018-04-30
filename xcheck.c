@@ -9,6 +9,11 @@
 
 int fsfd;
 
+#define T_UNALLOC 0
+#define T_DIR 1
+#define T_FILE 2
+#define T_DEV 3
+
 #define handle_error(msg) \
     do { perror(msg); exit(EXIT_FAILURE); } while (0)
 
@@ -87,6 +92,50 @@ void checkBitmap(int block, char* msg, int bmstart) {
     }
 }
 
+void checkRootInode(int dbstart, int dbend) {
+    uint inum = 1;
+    struct dinode din;
+    rinode(inum, &din);
+
+    // Make sure that the type is directory
+    if (din.type == T_DIR) {
+
+	// Checking the Direct pointers
+	for (int i = 0; i < NDIRECT; i++) {
+	    if (din.addrs[i] != 0) {
+		if (din.addrs[i] >= dbstart && din.addrs[i] <= dbend) {
+		    // Nothing to do here
+		    char buf[BSIZE];
+		    rsect(din.addrs[i], buf);
+
+		    struct dirent *curDir;
+		    curDir = (struct dirent*)buf;
+		    //printf("child inum: %d, child name: %s\n", curDir->inum, curDir->name);
+
+		    struct dirent *parentDir;
+		    parentDir = (struct dirent*)(buf + 16);
+		    //printf("parent inum: %d, parent name: %s\n", parentDir->inum, parentDir->name);
+		    if (curDir->inum != parentDir->inum || curDir->inum != 1 || parentDir->inum != 1) {
+			fprintf(stderr, "ERROR: root directory does not exist.\n");
+		    }
+		} else {
+		    fprintf(stderr, "ERROR: bad direct address in inode.\n");
+		}
+	    }
+	}
+
+	// Checking the indirect pointers
+	uint indirect = din.addrs[NDIRECT];
+	if (indirect != 0) { 
+	    if (indirect >= dbstart && indirect <= dbend) {
+		// Nothing to do here
+	    } else {
+		fprintf(stderr, "ERROR: bad indirect address in inode.\n");
+	    }
+	}
+    }
+}
+
 void checkInodes(struct superblock *sblk, char* fsstart) {
 
     printf("\n\n");
@@ -109,7 +158,9 @@ void checkInodes(struct superblock *sblk, char* fsstart) {
     printf("Data Block start #: %d\n", dbstart); 
     printf("Data Block end #: %d\n", dbend); 
 
-    for (uint inum = 1; inum < sblk->ninodes; inum++) {
+    checkRootInode(dbstart, dbend);
+
+    for (uint inum = 2; inum < sblk->ninodes; inum++) {
 	struct dinode din;
 	rinode(inum, &din);
 
@@ -133,11 +184,11 @@ void checkInodes(struct superblock *sblk, char* fsstart) {
 	    // Checking the indirect pointers
 	    uint indirect = din.addrs[NDIRECT];
 	    if (indirect != 0 && indirect >= dbstart && indirect <= dbend) {
-		
+
 		// Whether bitmap says its allocated
 		char *msg = "ERROR: bad indirect address in inode.";
 		checkBitmap(indirect, msg, bmstart);
-		
+
 		printf("-- Starting indirect pointers --\n");
 
 		// Get the address to data block inside indirect pointer block
@@ -147,6 +198,7 @@ void checkInodes(struct superblock *sblk, char* fsstart) {
 		    uint datablk = (uint)(*((int*)(buf + (i * 4))));
 		    if (datablk != 0 && datablk >= dbstart && datablk <= dbend) {
 			//printf("Block #: %d\n", datablk);
+			// TODO: Should this error be 'indirect' instead of 'direct'?
 			char *msg = "ERROR: bad direct address in inode.";
 			checkBitmap(din.addrs[i], msg, bmstart);
 		    } 
