@@ -455,13 +455,13 @@ int main(int argc, char *argv[]) {
     }
 
     // Checking if all the inodes are refered in some directory
-    //for (int i = 0; i < sblk.ninodes; i++) {
-    //    if (inodesInUse[i] == 1) {
-    //        printf("inum: %d\n", i);
-    //        char *msg = "ERROR: inode marked use but not found in a directory.";
-    //        printError(msg);
-    //    }
-    //}
+    for (int i = 0; i < sblk.ninodes; i++) {
+        if (inodesInUse[i] == 1) {
+            printf("inum: %d\n", i);
+            char *msg = "ERROR: inode marked use but not found in a directory.";
+            printError(msg);
+        }
+    }
 
     printf("Done with everything\n");
 
