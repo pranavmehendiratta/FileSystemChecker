@@ -4,3 +4,4 @@ mmap*
 runtests.log
 vg_summary.xml
 old/
+*.swp
