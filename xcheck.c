@@ -200,6 +200,8 @@ void checkInodes(struct superblock *sblk, char* fsstart) {
 			struct dirent *curDir;
 			curDir = (struct dirent*)buf;
 
+			printf("Dir name: '%s'\n", curDir->name);
+
 			if (inum != curDir->inum) {
 			    char* msg = "ERROR: directory not properly formatted.";
 			    printError(msg);
