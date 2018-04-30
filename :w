@@ -67,52 +67,37 @@ rinode(uint inum, struct dinode *ip)
     *ip = *dip;
 }
 
-int isNthBitTrue(unsigned char c, int n) {
-    static unsigned char mask[] = {1, 2, 4, 8, 16, 32, 64, 128};
-    return ((c & mask[n]) != 0);
-}
-
-void checkBitmap(int block, char* msg, int bmstart) {
-    printf("valid addr found: %d\n", block);
-
-    char buf[BSIZE];
-    rsect(bmstart + (block / (BSIZE * 8)), buf);	
-
-    int byte = block / 8;
-    int bit = block % 8;
-
-    if (isNthBitTrue(buf[byte], bit) == 0) {
-	fprintf(stderr, "%s\n", msg);
-	exit(1);
-    }
-}
-
 void checkInodes(struct superblock *sblk, char* fsstart) {
-
+    
     printf("\n\n");
-
+   
     printf("File system start: %p\n", fsstart);
-    printf("Dinode size: %zu\n", sizeof(struct dinode));
 
     int inodeBlks = (sblk->ninodes / (BSIZE / sizeof(struct dinode)));
     printf("# of inode blocks:  %d\n", inodeBlks);
 
-    int bmstart = 3 + inodeBlks; // 1st bitmap block
-    int bmend = bmstart + (sblk->nblocks / (BSIZE * 8));
+    int bmstart = 1 + inodeBlks; // 1st data block number
+    int bmend = bmstart;
 
+    if (BSIZE >= sblk->nblocks) {
+	bmend++;
+    } else if (BSIZE < sblk->nblocks)  {
+	bmend = bmend + (sblk->nblocks / BSIZE);
+    } 
+    
     printf("Bitmap start #: %d\n", bmstart); 
     printf("Bitmap end #: %d\n", bmend); 
 
     int dbstart = bmend + 1; // 1st data block number
     int dbend = dbstart + sblk->nblocks;
-
+    
     printf("Data Block start #: %d\n", dbstart); 
     printf("Data Block end #: %d\n", dbend); 
 
-    for (uint inum = 1; inum < sblk->ninodes; inum++) {
+    for (uint inum = 1; inum <= sblk->ninodes; inum++) {
 	struct dinode din;
 	rinode(inum, &din);
-
+	
 	if (din.type < 0 || din.type > 3) {
 	    fprintf(stderr, "ERROR: bad inode.");
 	    exit(1);
@@ -121,38 +106,32 @@ void checkInodes(struct superblock *sblk, char* fsstart) {
 	// Checking the inuse inodes
 	if (din.type != 0) {
 	    printf("---- inum: %d, type: %hu ----\n", inum, din.type);
-
+	    
 	    // Checking the Direct pointers
 	    for (int i = 0; i < NDIRECT; i++) {
-		if (din.addrs[i] != 0 && din.addrs[i] >= dbstart && din.addrs[i] <= dbend) {
-		    char *msg = "ERROR: bad direct address in inode.";
-		    checkBitmap(din.addrs[i], msg, bmstart);
-		} 
+		if (din.addrs[i] != 0 && din.addrs[i] >= dbstart 
+			&& din.addrs[i] <= dbend) {
+		    printf("ptr: %d, valid addr found: %d\n", i, din.addrs[i]);
+		    
+		    char buf[BSIZE];
+		    if (din.addrs[i] <= BSIZE) {
+			rsect(bmstart, buf);
+			//printf("Block looking for: %d\n", bmstart);
+			printf("block %d = %d", din.addrs[i], buf[din.addrs[i]]);
+		    } else {
+			rsect(bmstart + (din.addrs[i] / BSIZE), buf);	
+			//printf("Block looking for: %d\n", bmstart + (din.addrs[i] / BSIZE));
+		    }
+		} else {
+		    //printf("Block not allocated\n");
+		}
 	    }
 
 	    // Checking the indirect pointers
-	    uint indirect = din.addrs[NDIRECT];
-	    if (indirect != 0 && indirect >= dbstart && indirect <= dbend) {
-		
-		// Whether bitmap says its allocated
-		char *msg = "ERROR: bad indirect address in inode.";
-		checkBitmap(indirect, msg, bmstart);
-		
-		printf("-- Starting indirect pointers --\n");
-
-		// Get the address to data block inside indirect pointer block
-		char buf[512];
-		rsect(indirect, &buf);
-		for (int i = 0; i < 128; i++) {
-		    uint datablk = (uint)(*((int*)(buf + (i * 4))));
-		    if (datablk != 0 && datablk >= dbstart && datablk <= dbend) {
-			//printf("Block #: %d\n", datablk);
-			char *msg = "ERROR: bad direct address in inode.";
-			checkBitmap(din.addrs[i], msg, bmstart);
-		    } 
-		}
-	    }
 	}
+	
+	
+	
     }
 }
 
@@ -184,7 +163,7 @@ int main(int argc, char *argv[]) {
 	handle_error("open");
     }
 
-
+    
     if (fstat(fsfd, &sb) == -1) {      // To obtain file size 
 	handle_error("fstat");
     }
@@ -193,13 +172,13 @@ int main(int argc, char *argv[]) {
     offset = 0;
 
     fsstart = mmap_helper(fsfd, offset, length, sb);
-
+    
     // Get the superblock
     struct superblock sblk;
     getSuperBlock(fsstart, &sblk);
-
+    
     // Check the inodes
     checkInodes(&sblk, fsstart);
-
+    
     close(fsfd);
 }
