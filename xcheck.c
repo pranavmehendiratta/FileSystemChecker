@@ -13,6 +13,11 @@ int bmstart;
 int bmend;
 int dbstart;
 int dbend;
+int *bitmapInfo;
+int *indirectPtrs;
+int *inodesInUse;
+int *refCount;
+int *refCountDir;
 
 #define T_UNALLOC 0
 #define T_DIR 1
@@ -22,6 +27,11 @@ int dbend;
 void printError(char* msg) {
     printf("INSIDE PRINTERROR\n");
     fprintf(stderr, "%s\n", msg);
+    free(bitmapInfo);
+    free(indirectPtrs);
+    free(inodesInUse);
+    free(refCount);
+    free(refCountDir);
     exit(1);
 }
 
@@ -99,7 +109,7 @@ void checkBitmap(int block, char* msg, int bmstart) {
     }
 }
 
-void checkInodeBlock(uint inum, int* refCount) {
+void checkInodeBlock(uint inum, char *name, int* refCount, int* refCountDir) {
     struct dinode din;
     rinode(inum, &din);
    
@@ -115,9 +125,15 @@ void checkInodeBlock(uint inum, int* refCount) {
     	printf("File type inum: %d\n", inum);
         refCount[inum]--;
     }
+    
+    if (din.type == T_DIR && strcmp(name, ".") != 0 && strcmp(name, "..") != 0) {
+    	printf("Dir type inum: %d\n", inum);
+        refCountDir[inum]--;
+    }
 }
 
-void processDirDataBlock(struct superblock *sblk, char *buf, int *inodesInUse, int startIndex, int* refCount) {
+void processDirDataBlock(struct superblock *sblk, char *buf, int *inodesInUse, 
+			    int startIndex, int* refCount, int* refCountDir) {
     printf("Inside UpdateInodesInUse startIndex: %d\n", startIndex);
     int max_dirent = BSIZE / sizeof(struct dirent);
     printf("# of max_dirent: %d\n", max_dirent);
@@ -128,13 +144,13 @@ void processDirDataBlock(struct superblock *sblk, char *buf, int *inodesInUse, i
 	if (entry->inum != 0) {
 	    printf("inum: %d, name: %s\n", entry->inum, entry->name);
 	    inodesInUse[entry->inum]--;
-	    checkInodeBlock(entry->inum, refCount);
+	    checkInodeBlock(entry->inum, entry->name, refCount, refCountDir);
 	}
     }
 }
 
 void processDirectory (int inum, int* inodesInUse, struct superblock *sblk, uint addr, 
-		    int proc_dot_dot, int* refCount) {
+		    int proc_dot_dot, int* refCount, int* refCountDir) {
 
     printf("Inside process directory inum: %d, proc_dot_dot: %d\n", inum, proc_dot_dot);
 
@@ -183,18 +199,18 @@ void processDirectory (int inum, int* inodesInUse, struct superblock *sblk, uint
 	}	
 
 	// Checking that the inodes . and .. refers to are marked valid in the inode block
-	checkInodeBlock(curDir->inum, refCount);
-	checkInodeBlock(parentDir->inum, refCount);
+	checkInodeBlock(curDir->inum, curDir->name, refCount, refCountDir);
+	checkInodeBlock(parentDir->inum, parentDir->name, refCount, refCountDir);
 
     }
     // Updating the inodes used
     int startIndex = proc_dot_dot == 1 ? 2 : 0;
-    processDirDataBlock(sblk, buf, inodesInUse, startIndex, refCount);
+    processDirDataBlock(sblk, buf, inodesInUse, startIndex, refCount, refCountDir);
 }
 
 
 void checkInodes(struct superblock *sblk, char* fsstart, int* bitmapInfo, 
-	int* indirectPtrs, int* inodesInUse, int* refCount) {
+	int* indirectPtrs, int* inodesInUse, int* refCount, int* refCountDir) {
 
     printf("\n\n");
 
@@ -239,7 +255,7 @@ void checkInodes(struct superblock *sblk, char* fsstart, int* bitmapInfo,
 			    uint direct_addr = din.addrs[i];
 
 			    int proc_dot_dot = i == 0 ? 1 : 0;
-			    processDirectory(inum, inodesInUse, sblk, direct_addr, proc_dot_dot, refCount); 
+			    processDirectory(inum, inodesInUse, sblk, direct_addr, proc_dot_dot, refCount, refCountDir); 
 			}
 		    } else {
 			char *msg = "ERROR: bad direct address in inode.";
@@ -289,7 +305,7 @@ void checkInodes(struct superblock *sblk, char* fsstart, int* bitmapInfo,
 				// Performing all the checks for directories
 				if (din.type == T_DIR) {
 				    printf("--> Dir inside indirect pointer\n");
-				    processDirectory(inum, inodesInUse, sblk, datablk, 0, refCount); 
+				    processDirectory(inum, inodesInUse, sblk, datablk, 0, refCount, refCountDir); 
 				}
 				//printf("Block #: %d\n", datablk);
 				// TODO: Should this error be 'indirect' instead of 'direct'?
@@ -328,7 +344,10 @@ void getBitmapInfo(int* bitmapInfo, struct superblock *sblk) {
     for (int j = 0, i = dbstart; i < dbend; i++, j++) {
 	int byte = i / 8;
 	int bit = i % 8;
+	
 	bitmapInfo[j] = isNthBitTrue(buf[byte], bit);
+	
+	printf("byte: %d, bit: %d, i: %d, value: %d\n", byte, bit, i,  isNthBitTrue(buf[byte], bit));	
     }
 } 
 
@@ -342,12 +361,14 @@ void getInodesInUse(int *inodesInUse, struct superblock *sblk) {
     }
 }
 
-void getRefCountFiles(int *refCount, struct superblock *sblk) {
+void getRefCount(int *refCount, struct superblock *sblk, int* refCountDir) {
     for (uint inum = 1; inum < sblk->ninodes; inum++) {
 	struct dinode din;
 	rinode(inum, &din);
 	if (din.type == T_FILE) {
 	    refCount[inum] = din.nlink;
+	} else if (din.type == T_DIR) {
+	    refCountDir[inum] = 1;
 	}
     }
     
@@ -400,30 +421,36 @@ int main(int argc, char *argv[]) {
     printf("Data Block start #: %d\n", dbstart); 
     printf("Data Block end #: %d\n", dbend); 
 
-    int *bitmapInfo = (int*)malloc(sizeof(int) * sblk.nblocks);
+    bitmapInfo = malloc(sizeof(int) * sblk.nblocks);
 
     if (bitmapInfo == 0) {
 	fprintf(stderr, "Unable to allocate memory");
     }
 
-    int *indirectPtrs = (int*)malloc(sizeof(int) * sblk.nblocks);
+    indirectPtrs = malloc(sizeof(int) * sblk.nblocks);
 
     if (indirectPtrs == 0) {
 	fprintf(stderr, "Unable to allocate memory");
     }
 
-    int *inodesInUse = (int*)malloc(sizeof(int) * sblk.ninodes);
+    inodesInUse = malloc(sizeof(int) * sblk.ninodes);
 
     if (inodesInUse == 0) {
 	fprintf(stderr, "Unable to allocate memory");
     }
     
-    int *refCount = (int*)malloc(sizeof(int) * sblk.ninodes);
+    refCount = malloc(sizeof(int) * sblk.ninodes);
 
     if (refCount == 0) {
 	fprintf(stderr, "Unable to allocate memory");
     }
 
+    refCountDir = malloc(sizeof(int) * sblk.ninodes);
+
+    if (refCountDir == 0) {
+	fprintf(stderr, "Unable to allocate memory");
+    }
+    
     printf("bitmapInfo: %p\n", bitmapInfo);
     printf("indirectPtrs: %p\n", indirectPtrs);
     
@@ -439,15 +466,15 @@ int main(int argc, char *argv[]) {
     getInodesInUse(inodesInUse, &sblk); 
 
     // Get inodes reference links
-    getRefCountFiles(refCount, &sblk);
+    getRefCount(refCount, &sblk, refCountDir);
 
     //printf("--- Checking the ref count for files ---\n"); 
     //for (int inum = 0; inum < sblk.ninodes; inum++) {
-    //    printf("inum: %d, inuse: %d\n", inum, refCount[inum]);
+    //    printf("inum: %d, inuse: %d\n", inum, refCountDir[inum]);
     //}
 
     // Check the inodes
-    checkInodes(&sblk, fsstart, bitmapInfo, indirectPtrs, inodesInUse, refCount);
+    checkInodes(&sblk, fsstart, bitmapInfo, indirectPtrs, inodesInUse, refCount, refCountDir);
 
     printf("\n\n");
 
@@ -458,7 +485,7 @@ int main(int argc, char *argv[]) {
 	//printf("Bit: %d, value: %d\n", i, bitmapInfo[i]);
 	if (bitmapInfo[i] == 1) {
 	    //printf("Block: %d not used\n", i);
-
+	    printf("inum: %d\n", (i + dbstart));
 	    char *msg = "ERROR: bitmap marks block in use but it is not in use.";
 	    printError(msg);
 	} else if (bitmapInfo[i] < 0) {
@@ -492,6 +519,13 @@ int main(int argc, char *argv[]) {
             char *msg = "ERROR: bad reference count for file.";
             printError(msg);
 	}
+    
+	if (refCountDir[i] < 0) {
+            printf("inum: %d\n", i);
+            char *msg = "ERROR: directory appears more than once in file system.";
+            printError(msg);
+	}
+    
     }
     
     printf("Done with everything\n");
@@ -519,7 +553,7 @@ int main(int argc, char *argv[]) {
 
     //printf("--- Checking the ref count for files ---\n"); 
     //for (int inum = 0; inum < sblk.ninodes; inum++) {
-    //    printf("inum: %d, inuse: %d\n", inum, refCount[inum]);
+    //    printf("inum: %d, inuse: %d\n", inum, refCountDir[inum]);
     //}
     
     // Closing the image file and free the memory
@@ -529,5 +563,6 @@ int main(int argc, char *argv[]) {
     free(indirectPtrs);
     free(inodesInUse);
     free(refCount);
+    free(refCountDir);
     return 0;
 }
